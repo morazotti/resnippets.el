@@ -183,3 +183,13 @@
       (insert "<\\alpha|\\beta>")
       (should (resnippets--check))
       (should (equal (buffer-string) "\\braket{\\alpha}{\\beta}")))))
+
+(ert-deftest resnippets-test-funcall ()
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; Expand uppercase of capture
+      (resnippets-add "\\([a-z]+\\)up" '("UP: " (upcase (resnippets-group 1))))
+      (insert "fooup")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "UP: FOO")))))

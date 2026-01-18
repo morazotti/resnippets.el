@@ -92,6 +92,24 @@ Example:
                      `(apply #'resnippets-add ,(car s) ,(cadr s) ,props-code))
                    snippets)))))
 
+(defvar resnippets--last-match-data nil
+  "Holds the match data of the snippet currently being expanded.")
+
+(defvar resnippets--last-match-string nil
+  "Holds the match string of the snippet currently being expanded.")
+
+(defun resnippets-group (n)
+  "Return the content of capture group N from the current snippet match."
+  (let ((match-data resnippets--last-match-data)
+        (match-string resnippets--last-match-string))
+    (if (and match-data match-string)
+        (let ((start (nth (* 2 n) match-data))
+              (end (nth (1+ (* 2 n)) match-data)))
+          (if (and start end)
+              (substring match-string start end)
+            ""))
+      "")))
+
 (defun resnippets--expand (match-string match-data expansion)
   "Expand the snippet.
 MATCH-STRING is the full text that was matched (from buffer).
@@ -103,19 +121,22 @@ EXPANSION is the definition list."
   ;; We will use MATCH-STRING to extract groups.
   (delete-region (- (point) (length (substring match-string (nth 0 match-data) (nth 1 match-data))))
                  (point))
-  (let ((final-point nil))
+  (let ((final-point nil)
+        (resnippets--last-match-data match-data)
+        (resnippets--last-match-string match-string))
     (dolist (item expansion)
       (cond
        ((stringp item)
         (insert item))
        ((integerp item)
-        (let ((start (nth (* 2 item) match-data))
-              (end (nth (1+ (* 2 item)) match-data)))
-          (when (and start end)
-            (insert (substring match-string start end)))))
+        (insert (resnippets-group item)))
        ((or (equal item '(resnippet-cursor))
             (equal item '(resnippets-cursor)))
         (setq final-point (point-marker)))
+       ((listp item)
+        (let ((result (eval item)))
+          (when (or (stringp result) (numberp result))
+            (insert (format "%s" result)))))
        (t "")))
     (when final-point
       (goto-char final-point)

@@ -153,7 +153,10 @@ EXPANSION is the definition list."
                 (equal item '(resnippets-cursor)))
             (setq final-point (point-marker)))
            ((listp item)
-            (let ((result (eval item)))
+            (let ((result 
+                   (condition-case err
+                       (eval item)
+                     (error (message "Resnippets error: %S" err) nil))))
               (when (or (stringp result) (numberp result))
                 (insert (format "%s" result)))))
            (t "")))))

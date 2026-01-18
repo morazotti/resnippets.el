@@ -263,3 +263,18 @@
       (insert ";1+=5;")
       (should (resnippets--check))
       (should (equal (buffer-string) "6")))))
+
+(ert-deftest resnippets-test-error-handling ()
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; Snippet that causes an error (void-function)
+      (resnippets-add "err" '((funcall 'non-existent-function)))
+      (insert "err")
+      
+      ;; Should not crash check, but maybe insert nothing or error message?
+      ;; For now, let's just ensure it checks without throwing elisp signal to top level
+      ;; We will implement robust error catching next.
+      (should (resnippets--check)) 
+      ;; It inserts nothing, just prints message
+      (should (equal (buffer-string) "")))))

@@ -346,3 +346,157 @@
       (insert "Integracao")  ;; Capitalized, but snippet is lowercase
       (should-not (resnippets--check))
       (should (equal (buffer-string) "Integracao")))))
+
+;; Tests for :priority feature
+
+(ert-deftest resnippets-test-priority-higher-wins ()
+  "Test that higher priority snippet wins when multiple match."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; Both match "foohat", but regex version has higher priority
+      (resnippets-add "foohat" "literal" :priority 5)
+      (resnippets-add "\\([a-z]+\\)hat" '("\\hat{" 1 "}") :priority 10)
+      (insert "foohat")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "\\hat{foo}")))))
+
+(ert-deftest resnippets-test-priority-lower-loses ()
+  "Test that lower priority snippet loses."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; Literal has higher priority now
+      (resnippets-add "foohat" "literal" :priority 10)
+      (resnippets-add "\\([a-z]+\\)hat" '("\\hat{" 1 "}") :priority 5)
+      (insert "foohat")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "literal")))))
+
+(ert-deftest resnippets-test-priority-default-zero ()
+  "Test that snippets without :priority default to 0."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; No priority = 0, explicit priority 1 wins
+      (resnippets-add "test" "no-priority")
+      (resnippets-add "test" "has-priority" :priority 1)
+      (insert "test")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "has-priority")))))
+
+(ert-deftest resnippets-test-define-per-snippet-props ()
+  "Test that per-snippet props override shared props in resnippets-define."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-define "test-group" '(:priority 1)
+        ("foo" "FOO-LOW")              ;; priority 1
+        ("foo" "FOO-HIGH" :priority 10)) ;; priority 10 overrides
+
+      (insert "foo")
+      (should (resnippets--check))
+      ;; FOO-HIGH should win because it has higher priority
+      (should (equal (buffer-string) "FOO-HIGH")))))
+
+;; Tests for :word-boundary feature
+
+(ert-deftest resnippets-test-word-boundary-matches ()
+  "Test that :word-boundary matches at word start."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-add "int" "\\int" :word-boundary t)
+      (insert "int")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "\\int")))))
+
+(ert-deftest resnippets-test-word-boundary-no-match-mid-word ()
+  "Test that :word-boundary does NOT match mid-word."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-add "int" "\\int" :word-boundary t)
+      (insert "print")  ;; "int" is at end but not at word boundary
+      (should-not (resnippets--check))
+      (should (equal (buffer-string) "print")))))
+
+(ert-deftest resnippets-test-word-boundary-after-space ()
+  "Test that :word-boundary matches after space."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-add "int" "\\int" :word-boundary t)
+      (insert "foo int")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "foo \\int")))))
+
+;; Tests for :chain feature
+
+(ert-deftest resnippets-test-chain-basic ()
+  "Test that :chain triggers another expansion."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; "int" -> "\int " which then chains to match "\int " -> "INTEGRAL"
+      (resnippets-add "int" "\\int " :chain t)
+      (resnippets-add "\\\\int " "INTEGRAL")
+      (insert "int")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "INTEGRAL")))))
+
+(ert-deftest resnippets-test-chain-no-match ()
+  "Test that :chain doesn't break when no further match exists."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-add "foo" "bar" :chain t)
+      (insert "foo")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "bar")))))
+
+(ert-deftest resnippets-test-chain-depth-limit ()
+  "Test that chain depth limit prevents infinite loops."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil)
+          (resnippets-max-chain-depth 3))
+      ;; Infinite loop: "a" -> "a" with chain would loop forever
+      (resnippets-add "a" "a" :chain t)
+      (insert "a")
+      ;; Should expand 3 times max and stop, result is still "a"
+      (should (resnippets--check))
+      (should (equal (buffer-string) "a")))))
+
+;; Tests for export/load feature
+
+(ert-deftest resnippets-test-export-load ()
+  "Test that export and load work correctly."
+  (let ((resnippets--snippets nil)
+        (temp-file (make-temp-file "resnippets-test" nil ".el")))
+    (unwind-protect
+        (progn
+          ;; Add some snippets
+          (resnippets-add "foo" "bar" :priority 5)
+          (resnippets-add "baz" '("qux" 1) :mode 'text-mode)
+          (should (equal (length resnippets--snippets) 2))
+
+          ;; Export
+          (resnippets-export temp-file)
+
+          ;; Clear and verify empty
+          (resnippets-clear)
+          (should (equal (length resnippets--snippets) 0))
+
+          ;; Load
+          (resnippets-load temp-file)
+          (should (equal (length resnippets--snippets) 2))
+
+          ;; Verify first snippet works
+          (with-temp-buffer
+            (resnippets-mode 1)
+            (insert "foo")
+            (should (resnippets--check))
+            (should (equal (buffer-string) "bar"))))
+      ;; Cleanup
+      (delete-file temp-file))))

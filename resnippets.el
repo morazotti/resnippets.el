@@ -81,24 +81,32 @@ Example:
   "Define multiple snippets with shared PROPS.
 LABEL-OR-PROPS can be an optional string label, followed by PROPS.
 ARGS is PROPS (if label used) and then SNIPPETS.
-SNIPPETS is a list of (REGEX EXPANSION) lists.
+SNIPPETS is a list of (REGEX EXPANSION [PROPS...]) where PROPS are
+optional per-snippet properties that override the shared ones.
 
 If LABEL is provided, any existing snippets with that label are removed first.
 
 Example:
-  (resnippets-define \"my-group\" '(:mode org-mode)
-    (\"alpha\" \"\\\\alpha\"))"
+  (resnippets-define \"my-group\" '(:mode org-mode :priority 1)
+    (\"alpha\" \"\\\\alpha\" :priority 10)  ;; Override priority
+    (\"beta\" \"\\\\beta\"))                ;; Uses shared priority 1"
   (let ((label (if (stringp label-or-props) label-or-props nil))
         (props (if (stringp label-or-props) (car args) label-or-props))
         (snippets (if (stringp label-or-props) (cdr args) args)))
-    ;; We need to combine props with label if label exists
     (let ((props-code (if label
                           `(append (list :label ,label) ,props)
                         props)))
       `(progn
          ,(when label `(resnippets-remove-by-label ,label))
          ,@(mapcar (lambda (s)
-                     `(apply #'resnippets-add ,(car s) ,(cadr s) ,props-code))
+                     (let ((regex (car s))
+                           (expansion (cadr s))
+                           (snippet-props (cddr s)))
+                       (if snippet-props
+                           ;; Merge: snippet props override shared props
+                           `(apply #'resnippets-add ,regex ,expansion
+                                   (append (list ,@snippet-props) ,props-code))
+                         `(apply #'resnippets-add ,regex ,expansion ,props-code))))
                    snippets)))))
 
 (defvar resnippets--last-match-data nil
@@ -154,6 +162,7 @@ When MATCH-CASE is non-nil, apply the detected case pattern to strings."
   ;; but wait, we effectively matched (concat regex "\\'").
   ;; Group 0 is the entire match.
   ;; We will use MATCH-STRING to extract groups.
+  (undo-boundary)  ;; Group all changes for atomic undo
   (delete-region (- (point) (length (substring match-string (nth 0 match-data) (nth 1 match-data))))
                  (point))
   (let* ((final-point nil)
@@ -187,19 +196,51 @@ When MATCH-CASE is non-nil, apply the detected case pattern to strings."
       (goto-char final-point)
       (set-marker final-point nil))))
 
+(defvar resnippets--chain-depth 0
+  "Current depth of chained expansions.")
+
+(defcustom resnippets-max-chain-depth 10
+  "Maximum depth for chained snippet expansions to prevent infinite loops."
+  :type 'integer
+  :group 'resnippets)
+
 (defun resnippets--check ()
-  "Check if the text before point matches any registered snippet."
+  "Check if the text before point matches any registered snippet.
+When multiple snippets match, the one with highest :priority wins (default 0).
+When :word-boundary is t, the snippet only matches at word boundaries.
+When :chain is t, after expansion, check for more snippet matches."
   (let* ((limit (max (point-min) (- (point) resnippets-lookback-limit)))
-         (text-to-check (buffer-substring-no-properties limit (point))))
+         (text-to-check (buffer-substring-no-properties limit (point)))
+         (matches nil))
+    ;; Collect all matching snippets
     (cl-loop for (regex expansion . props) in resnippets--snippets
              for match-case = (plist-get props :match-case)
+             for word-boundary = (plist-get props :word-boundary)
              for case-fold-search = match-case
-             if (and (resnippets--check-condition props)
-                     (string-match (concat regex "\\'") text-to-check))
-             return
-             (let ((data (match-data)))
-               (resnippets--expand text-to-check data expansion match-case)
-               t))))
+             for effective-regex = (if word-boundary
+                                       (concat "\\_<" regex)
+                                     regex)
+             when (and (resnippets--check-condition props)
+                       (string-match (concat effective-regex "\\'") text-to-check))
+             do (push (list (match-data) expansion props) matches))
+    ;; Sort by priority (highest first) and expand the winner
+    (when matches
+      (let* ((sorted (sort matches
+                           (lambda (a b)
+                             (> (or (plist-get (nth 2 a) :priority) 0)
+                                (or (plist-get (nth 2 b) :priority) 0)))))
+             (winner (car sorted))
+             (data (nth 0 winner))
+             (expansion (nth 1 winner))
+             (props (nth 2 winner))
+             (match-case (plist-get props :match-case))
+             (chain (plist-get props :chain)))
+        (resnippets--expand text-to-check data expansion match-case)
+        ;; Chain: try to match more snippets after expansion
+        (when (and chain (< resnippets--chain-depth resnippets-max-chain-depth))
+          (let ((resnippets--chain-depth (1+ resnippets--chain-depth)))
+            (resnippets--check)))
+        t))))
 
 (defun resnippets--post-command-handler ()
   "Handler for `post-command-hook` (or `post-self-insert-hook`)."
@@ -219,6 +260,54 @@ When MATCH-CASE is non-nil, apply the detected case pattern to strings."
 
 ;;;###autoload
 (define-globalized-minor-mode resnippets-global-mode resnippets-mode resnippets-mode)
+
+;;;###autoload
+(defun resnippets-export (file)
+  "Export all registered snippets to FILE.
+The file can later be loaded with `resnippets-load`."
+  (interactive "FExport snippets to file: ")
+  (with-temp-file file
+    (insert ";;; Resnippets export file -*- lexical-binding: t; -*-\n")
+    (insert ";; Generated by resnippets-export\n\n")
+    (dolist (snippet (reverse resnippets--snippets))
+      (let ((regex (car snippet))
+            (expansion (cadr snippet))
+            (props (cddr snippet)))
+        ;; Check if expansion is a single-string list, convert back to string
+        (let ((exp-output (if (and (listp expansion)
+                                   (= (length expansion) 1)
+                                   (stringp (car expansion)))
+                              (car expansion)
+                            expansion)))
+          (insert (format "(resnippets-add %S " regex))
+          (if (listp exp-output)
+              (insert (format "'%S" exp-output))
+            (insert (format "%S" exp-output)))
+          (while props
+            (let ((key (car props))
+                  (val (cadr props)))
+              (insert (format " %s " key))
+              ;; Quote symbols and lists, but not strings, numbers, or t/nil
+              (cond
+               ((or (stringp val) (numberp val) (eq val t) (eq val nil))
+                (insert (format "%S" val)))
+               ((symbolp val)
+                (insert (format "'%S" val)))
+               ((listp val)
+                (insert (format "'%S" val)))
+               (t
+                (insert (format "%S" val)))))
+            (setq props (cddr props)))
+          (insert ")\n"))))
+    (insert "\n;;; End of export\n"))
+  (message "Exported %d snippets to %s" (length resnippets--snippets) file))
+
+;;;###autoload
+(defun resnippets-load (file)
+  "Load snippets from FILE exported by `resnippets-export`."
+  (interactive "fLoad snippets from file: ")
+  (load-file file)
+  (message "Loaded snippets from %s" file))
 
 (provide 'resnippets)
 ;;; resnippets.el ends here

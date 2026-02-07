@@ -56,6 +56,37 @@ You can restrict snippets using `:mode` or `:condition`.
                 :condition '(or (texmathp) (org-inside-LaTeX-fragment-p)))
 ```
 
+### Priority
+
+When multiple snippets match, use `:priority` to control which one wins (default: 0).
+
+```elisp
+;; Both match "foohat", but regex has higher priority
+(resnippets-add "foohat" "literal" :priority 5)
+(resnippets-add "\\([a-z]+\\)hat" '("\\hat{" 1 "}") :priority 10)
+;; "foohat" → "\hat{foo}" (priority 10 wins)
+```
+
+### Word Boundary
+
+Use `:word-boundary t` to match only at word boundaries (avoids matching mid-word).
+
+```elisp
+(resnippets-add "int" "\\int" :word-boundary t)
+;; "int" → "\int" ✓
+;; "print" → no match (int is mid-word) ✗
+```
+
+### Chained Expansions
+
+Use `:chain t` to trigger further snippet matches after expansion.
+
+```elisp
+(resnippets-add "int" "\\int " :chain t)
+(resnippets-add "\\\\int " "INTEGRAL")
+;; "int" → "\int " → "INTEGRAL" (chained)
+```
+
 ### Case-Preserving Substitutions
 
 Use `:match-case t` to make the expansion match the case pattern of the input.
@@ -88,7 +119,11 @@ Use `resnippets-define` to define multiple snippets with shared properties.
 
 ```elisp
 (resnippets-remove "regex-key") ;; Remove a specific snippet
-(resnippets-clear)             ;; Remove all snippets
+(resnippets-clear)              ;; Remove all snippets
+
+;; Export/Import
+(resnippets-export "~/.emacs.d/snippets.el")  ;; Save to file
+(resnippets-load "~/.emacs.d/snippets.el")    ;; Load from file
 ```
 
 ## Contribution

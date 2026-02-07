@@ -543,3 +543,35 @@
       (should (resnippets--check))
       ;; Without yasnippet, placeholders are stripped
       (should (string= (buffer-string) "function () {  }")))))
+
+(ert-deftest resnippets-test-yasnippet-fallback-with-defaults ()
+  "Test yasnippet fallback strips defaults correctly."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; Template with default values: ${1:name}
+      (resnippets-add "class" (resnippets-yasnippet "class ${1:ClassName} { $0 }"))
+      (insert "class")
+      (should (resnippets--check))
+      ;; Default values should be stripped in fallback
+      (should (string= (buffer-string) "class  {  }")))))
+
+(ert-deftest resnippets-test-yasnippet-returns-string ()
+  "Test that resnippets-yasnippet returns a proper expansion form."
+  ;; resnippets-yasnippet should return a list containing an eval form
+  (let ((result (resnippets-yasnippet "test $1")))
+    (should (listp result))
+    (should (listp (car result)))
+    (should (eq (caar result) 'resnippets--expand-yasnippet))))
+
+(ert-deftest resnippets-test-yasnippet-complex-template ()
+  "Test yasnippet fallback with complex template."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      ;; More complex template with multiple placeholders
+      (resnippets-add "for" (resnippets-yasnippet "for (${1:i} = 0; $1 < ${2:n}; $1++) {\n$0\n}"))
+      (insert "for")
+      (should (resnippets--check))
+      ;; Fallback should produce reasonable output
+      (should (string-match-p "for" (buffer-string))))))

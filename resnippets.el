@@ -162,13 +162,23 @@ Each element is (FIELD-NUM . OVERLAY).")
   "Non-nil when actively editing a snippet field.")
 
 (defface resnippets-field-face
-  '((t :background "#3a3a5a" :extend t))
-  "Face for active snippet fields."
+  '((((class color) (background dark))
+     :background "#44475a" :box (:line-width (-1 . -1) :color "#6272a4"))
+    (((class color) (background light))
+     :background "#e8e8fc" :box (:line-width (-1 . -1) :color "#6c71c4"))
+    (t :inherit highlight))
+  "Face for active snippet fields.
+Fields are editable placeholders that can be tabbed between."
   :group 'resnippets)
 
 (defface resnippets-mirror-face
-  '((t :background "#2a4a2a" :extend t))
-  "Face for snippet mirrors."
+  '((((class color) (background dark))
+     :background "#3a3a4a" :slant italic)
+    (((class color) (background light))
+     :background "#f0f0f0" :slant italic)
+    (t :inherit shadow))
+  "Face for snippet mirrors.
+Mirrors automatically reflect the content of their linked field."
   :group 'resnippets)
 
 (defvar resnippets-field-keymap

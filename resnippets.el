@@ -285,8 +285,13 @@ Returns the inserted text length."
   "Go to field N and select its content."
   (let ((ov (cdr (assq n resnippets--active-fields))))
     (when (and ov (overlay-buffer ov))
-      (goto-char (overlay-start ov))
-      (push-mark (overlay-end ov) t t))))
+      (let ((start (overlay-start ov))
+            (end (overlay-end ov)))
+        (goto-char end)
+        (push-mark start t t)
+        ;; Activate the region so delete-selection-mode works
+        (setq deactivate-mark nil)
+        (activate-mark)))))
 
 (defun resnippets-exit-field ()
   "Exit field editing and finalize snippet."
@@ -317,6 +322,9 @@ Returns the inserted text length."
   "Activate field editing mode if there are fields."
   (when resnippets--active-fields
     (setq resnippets--in-field t)
+    ;; Ensure transient-mark-mode is active for selection to work
+    (unless transient-mark-mode
+      (transient-mark-mode 1))
     ;; Go to first field
     (let ((first-field (car (sort (mapcar #'car resnippets--active-fields) #'<))))
       (resnippets--goto-field first-field))))

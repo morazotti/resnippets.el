@@ -185,7 +185,7 @@ When MATCH-CASE is non-nil, apply the detected case pattern to strings."
                 (equal item '(resnippets-cursor)))
             (setq final-point (point-marker)))
            ((listp item)
-            (let ((result 
+            (let ((result
                    (condition-case err
                        (eval item)
                      (error (message "Resnippets error: %S" err) nil))))

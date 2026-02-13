@@ -648,3 +648,61 @@
             ;; Should have only the new snippet (old was cleaned)
             (should (= (length resnippets--snippets) 1))))
       (delete-directory dir t))))
+
+;; Tests for resnippets-insert command
+
+(ert-deftest resnippets-test-insert-command ()
+  "Test interactive insertion command logic."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-add "foo" "FOO")
+      (resnippets-add "bar" "BAR" :mode 'emacs-lisp-mode)
+      (resnippets-add "baz" "BAZ" :insert "my-baz")
+
+      ;; Verify filtering (bar should not be active in fundamental-mode)
+      (should (equal (length (resnippets--active-snippets)) 2))
+      (should (cl-find "foo" (resnippets--active-snippets) :key #'car :test #'string=))
+      (should (cl-find "baz" (resnippets--active-snippets) :key #'car :test #'string=))
+
+      ;; Verify formatting
+      (let ((formatted (resnippets--format-candidate (car resnippets--snippets))))
+        (should (stringp formatted)))
+
+      ;; Verify insertion logic (mocking completing-read)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt candidates _pred _require)
+                   (car (car candidates))))) ;; Select first candidate
+        ;; Insert default regex
+        (let ((resnippets--snippets (list '("foo" "FOO"))))
+          (resnippets-insert)
+          (should (equal (buffer-string) "foo")))
+
+        (erase-buffer)
+        ;; Insert custom :insert property
+        (let ((resnippets--snippets (list '("baz" "BAZ" :insert "my-baz"))))
+          (resnippets-insert)
+          (should (equal (buffer-string) "my-baz")))))))
+
+
+(ert-deftest resnippets-test-diagnose ()
+  "Test that diagnose buffer is created and populated."
+  (let ((resnippets--snippets nil))
+    (resnippets-add "active" "A" :mode 'emacs-lisp-mode)
+    (resnippets-add "inactive-mode" "I" :mode 'text-mode)
+    (resnippets-add "inactive-cond" "C" :condition '(eq 1 2))
+
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (resnippets-diagnose)
+      (let ((buf (get-buffer "*Resnippets Diagnose*")))
+        (unwind-protect
+            (with-current-buffer buf
+              (let ((content (buffer-string)))
+                ;; Columns are STATUS | LABEL | REGEX
+                (should (string-match "ACTIVE.*active" content))
+                (should (string-match "INACTIVE.*inactive-mode" content))
+                (should (string-match "INACTIVE.*inactive-cond" content))
+                (should (string-match "Condition failed" content))))
+          (if buf (kill-buffer buf)))))))
+

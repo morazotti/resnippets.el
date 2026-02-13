@@ -339,6 +339,99 @@ If the file has been deleted, removes the previously loaded snippets."
         (message "Resnippets: %s removed, snippets cleaned" resnippets-project-file)))))
 
 
+(defun resnippets-diagnose ()
+  "Diagnose snippet activation.
+Creates a buffer listing all snippets and their current status (Active/Inactive),
+showing which condition failed.
+Checks are performed in the context of the current buffer."
+  (interactive)
+  (let ((origin-buffer (current-buffer))
+        (origin-mode major-mode)
+        (buf (get-buffer-create "*Resnippets Diagnose*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert (format "Resnippets Diagnostics (Buffer: %s, Mode: %s)\n\n"
+                      (buffer-name origin-buffer) origin-mode))
+      (insert (format "%-10s | %-20s | %-30s | %s\n" "STATUS" "LABEL" "REGEX" "REASON"))
+      (insert (make-string 80 ?-) "\n")
+      (dolist (snippet (reverse resnippets--snippets))
+        (let* ((regex (car snippet))
+               (props (cddr snippet))
+               (label (or (plist-get props :label) "-"))
+               (mode (plist-get props :mode))
+               (condition (plist-get props :condition))
+               (evaluation-results
+                (with-current-buffer origin-buffer
+                  (let ((mode-ok (or (null mode)
+                                     (if (listp mode)
+                                         (apply #'derived-mode-p mode)
+                                       (derived-mode-p mode))))
+                        (cond-ok (or (null condition)
+                                     (condition-case err
+                                         (eval condition)
+                                       (error (format "ERROR: %s" err))))))
+                    (list mode-ok cond-ok))))
+               (mode-ok (nth 0 evaluation-results))
+               (cond-ok (nth 1 evaluation-results))
+               (status (if (and mode-ok (not (stringp cond-ok)) cond-ok) "ACTIVE" "INACTIVE"))
+               (reason (cond
+                        ((not mode-ok) (format "Mode mismatch (Expeted: %s)" mode))
+                        ((stringp cond-ok) cond-ok) ;; Error message
+                        ((not cond-ok) (format "Condition failed: %S" condition))
+                        (t "OK"))))
+          (insert (format "%-10s | %-20s | %-30s | %s\n"
+                          status
+                          (truncate-string-to-width label 20 0 nil "...")
+                          (truncate-string-to-width regex 30 0 nil "...")
+                          reason)))))
+    (pop-to-buffer buf)))
+
+
+(defun resnippets--format-candidate (snippet)
+  "Format a snippet entry for display in `completing-read`.
+SNIPPET is specific format: (REGEX EXPANSION . PROPS)."
+  (let* ((regex (car snippet))
+         (expansion (cadr snippet))
+         (props (cddr snippet))
+         (label (plist-get props :label))
+         (desc (if label
+                   (format "%s (%s)" label regex)
+                 regex))
+         ;; Format expansion preview
+         (preview (if (stringp expansion)
+                      expansion
+                    (format "%S" expansion)))
+         ;; Truncate preview
+         (preview (if (> (length preview) 50)
+                      (concat (substring preview 0 47) "...")
+                    preview)))
+    (format "%-40s -> %s" desc preview)))
+
+(defun resnippets--active-snippets ()
+  "Return a list of snippets active in the current context."
+  (cl-remove-if-not (lambda (snippet)
+                      (resnippets--check-condition (cddr snippet)))
+                    resnippets--snippets))
+
+;;;###autoload
+(defun resnippets-insert ()
+  "Interactively insert a snippet trigger or content.
+Lists only snippets active in the current buffer context.
+If a snippet has an :insert property, inserts that string.
+Otherwise, inserts the regex trigger."
+  (interactive)
+  (let* ((candidates (mapcar (lambda (s)
+                               (cons (resnippets--format-candidate s) s))
+                             (resnippets--active-snippets)))
+         (selection (completing-read "Insert snippet: " candidates nil t))
+         (snippet (cdr (assoc selection candidates)))
+         (regex (car snippet))
+         (props (cddr snippet))
+         (insert-val (plist-get props :insert)))
+    (if insert-val
+        (insert insert-val)
+      (insert regex))))
+
 ;;;###autoload
 (define-globalized-minor-mode resnippets-global-mode resnippets-mode resnippets-mode)
 

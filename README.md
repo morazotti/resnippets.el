@@ -146,9 +146,25 @@ The file is loaded once per session. Use `M-x resnippets-reload-project` to relo
 
 Customize the filename with `resnippets-project-file`.
 
+### Interactive Insertion
+
+Use `M-x resnippets-insert` to list and insert snippets available in the current context. This is useful for discovering snippets or inserting complex ones.
+
+- **Regex Snippets**: Inserts the regex trigger text (so you can trigger it manually).
+- **Custom Insertion**: Use `:insert "text"` property to define what `resnippets-insert` should insert instead of the regex.
+
+```elisp
+;; Normal: inserts "foo"
+(resnippets-add "foo" "bar")
+
+;; Custom: inserts "my-trigger" (e.g. if regex is too complex)
+(resnippets-add "\\(complex\\)" "expansion" :insert "my-trigger")
+```
 
 ### Management
 
+- `M-x resnippets-reload-project`: Reload the current project's `.resnippets.el` file.
+- `M-x resnippets-diagnose`: Open a buffer listing all snippets and their status (Active/Inactive). If inactive, it shows exactly which condition failed (e.g. `Mode mismatch` or `Condition failed: (eq 1 2)`). Useful for debugging why a snippet isn't expanding.
 
 ```elisp
 (resnippets-remove "regex-key") ;; Remove a specific snippet

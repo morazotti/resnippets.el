@@ -291,6 +291,7 @@ When :chain is t, after expansion, check for more snippet matches."
   (if resnippets-mode
       (progn
         (add-hook 'post-self-insert-hook #'resnippets--post-command-handler nil t)
+        (add-hook 'after-save-hook #'resnippets--after-save-handler)
         (resnippets--load-project-file))
     (remove-hook 'post-self-insert-hook #'resnippets--post-command-handler t)))
 
@@ -316,6 +317,7 @@ When :chain is t, after expansion, check for more snippet matches."
              (resnippets--current-project-root dir))
         (load file nil t))
       (push file resnippets--loaded-project-files)
+      (resnippets--setup-watch file)
       (message "Resnippets: loaded %s" file))))
 
 (defun resnippets-reload-project ()
@@ -337,6 +339,80 @@ If the file has been deleted, removes the previously loaded snippets."
               (cl-remove-if (lambda (f) (string-prefix-p dir f))
                             resnippets--loaded-project-files))
         (message "Resnippets: %s removed, snippets cleaned" resnippets-project-file)))))
+
+;;; Hot Reload via file-notify
+
+(defvar resnippets--watch-descriptors nil
+  "Alist mapping project file paths to their `file-notify' watch descriptors.")
+
+(defun resnippets--setup-watch (file)
+  "Set up a file watcher for project snippet FILE.
+If a watcher already exists for FILE, do nothing."
+  (unless (assoc file resnippets--watch-descriptors)
+    (when (fboundp 'file-notify-add-watch)
+      (condition-case err
+          (let ((desc (file-notify-add-watch
+                       file '(change)
+                       #'resnippets--file-watch-callback)))
+            (push (cons file desc) resnippets--watch-descriptors))
+        (error (message "Resnippets: could not watch %s: %S" file err))))))
+
+(defun resnippets--file-watch-callback (event)
+  "Callback for file-notify events on project snippet files.
+EVENT is the file-notify event."
+  (let ((descriptor (nth 0 event))
+        (action (nth 1 event))
+        (file (nth 2 event)))
+    (pcase action
+      ((or 'changed 'renamed)
+       (when (file-exists-p file)
+         (let ((dir (file-name-directory file)))
+           (resnippets-remove-by-label (resnippets--project-label dir))
+           (setq resnippets--loaded-project-files
+                 (delete file resnippets--loaded-project-files))
+           (let ((resnippets--current-project-root dir))
+             (load file nil t))
+           (push file resnippets--loaded-project-files)
+           (message "Resnippets: hot-reloaded %s" file))))
+      ('deleted
+       (let ((dir (file-name-directory file)))
+         (resnippets-remove-by-label (resnippets--project-label dir))
+         (setq resnippets--loaded-project-files
+               (delete file resnippets--loaded-project-files))
+         (resnippets--remove-watch file)
+         (message "Resnippets: %s deleted, snippets removed" file))))))
+
+(defun resnippets--remove-watch (file)
+  "Remove the file watcher for FILE."
+  (let ((entry (assoc file resnippets--watch-descriptors)))
+    (when entry
+      (ignore-errors (file-notify-rm-watch (cdr entry)))
+      (setq resnippets--watch-descriptors
+            (assq-delete-all (car entry) resnippets--watch-descriptors)))))
+
+(defun resnippets-stop-watching ()
+  "Remove all file watchers for project snippet files."
+  (interactive)
+  (dolist (entry resnippets--watch-descriptors)
+    (ignore-errors (file-notify-rm-watch (cdr entry))))
+  (setq resnippets--watch-descriptors nil)
+  (message "Resnippets: all file watchers removed"))
+
+(defun resnippets--after-save-handler ()
+  "Reload project snippets when a `.resnippets.el' file is saved.
+This provides reliable hot reload without depending on `file-notify'."
+  (when (and buffer-file-name
+             (string= (file-name-nondirectory buffer-file-name)
+                      resnippets-project-file))
+    (let ((file buffer-file-name)
+          (dir (file-name-directory buffer-file-name)))
+      (resnippets-remove-by-label (resnippets--project-label dir))
+      (setq resnippets--loaded-project-files
+            (delete file resnippets--loaded-project-files))
+      (let ((resnippets--current-project-root dir))
+        (load file nil t))
+      (push file resnippets--loaded-project-files)
+      (message "Resnippets: reloaded %s" file))))
 
 
 (defun resnippets-diagnose ()

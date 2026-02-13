@@ -706,3 +706,70 @@
                 (should (string-match "Condition failed" content))))
           (if buf (kill-buffer buf)))))))
 
+;; Tests for hot reload
+
+(ert-deftest resnippets-test-hot-reload-changed ()
+  "Test that the file-watch callback reloads snippets on change."
+  (let* ((dir (make-temp-file "resnippets-proj-" t))
+         (file (expand-file-name ".resnippets.el" dir))
+         (resnippets--snippets nil)
+         (resnippets--loaded-project-files nil)
+         (resnippets--watch-descriptors nil))
+    (unwind-protect
+        (progn
+          ;; Create initial file and load it
+          (with-temp-file file
+            (insert "(resnippets-add \"hr1\" \"version1\")\n"))
+          (let ((default-directory (file-name-as-directory dir))
+                (resnippets-project-file ".resnippets.el"))
+            (resnippets--load-project-file))
+          ;; Should have 1 snippet
+          (should (= (length resnippets--snippets) 1))
+
+          ;; Update the file
+          (with-temp-file file
+            (insert "(resnippets-add \"hr2\" \"version2\")\n"))
+
+          ;; Simulate the file-notify callback with a 'changed event
+          (resnippets--file-watch-callback (list nil 'changed file))
+
+          ;; Should have replaced old snippet with new one
+          (should (= (length resnippets--snippets) 1))
+          (should (string= (car (car resnippets--snippets)) "hr2"))
+
+          ;; Verify expansion works
+          (with-temp-buffer
+            (let ((default-directory (file-name-as-directory dir)))
+              (resnippets-mode 1)
+              (insert "hr2")
+              (should (resnippets--check))
+              (should (equal (buffer-string) "version2")))))
+      (delete-directory dir t))))
+
+(ert-deftest resnippets-test-hot-reload-deleted ()
+  "Test that the file-watch callback cleans up on delete."
+  (let* ((dir (make-temp-file "resnippets-proj-" t))
+         (file (expand-file-name ".resnippets.el" dir))
+         (resnippets--snippets nil)
+         (resnippets--loaded-project-files nil)
+         (resnippets--watch-descriptors nil))
+    (unwind-protect
+        (progn
+          ;; Create and load
+          (with-temp-file file
+            (insert "(resnippets-add \"del1\" \"gone\")\n"))
+          (let ((default-directory (file-name-as-directory dir))
+                (resnippets-project-file ".resnippets.el"))
+            (resnippets--load-project-file))
+          (should (= (length resnippets--snippets) 1))
+
+          ;; Delete the file
+          (delete-file file)
+
+          ;; Simulate the file-notify callback with a 'deleted event
+          (resnippets--file-watch-callback (list nil 'deleted file))
+
+          ;; Snippets should be removed
+          (should (= (length resnippets--snippets) 0))
+          (should (null (member file resnippets--loaded-project-files))))
+      (ignore-errors (delete-directory dir t)))))

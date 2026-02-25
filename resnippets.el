@@ -559,5 +559,76 @@ The file can later be loaded with `resnippets-load`."
   (load-file file)
   (message "Loaded snippets from %s" file))
 
+
+;;; Interactive Snippet Definition
+
+(defun resnippets--snippet-at-point ()
+  "Get the active region or the word/sexp at point as a string."
+  (if (use-region-p)
+      (buffer-substring-no-properties (region-beginning) (region-end))
+    (let ((bounds (bounds-of-thing-at-point 'sexp)))
+      (if bounds
+          (buffer-substring-no-properties (car bounds) (cdr bounds))
+        ""))))
+
+;;;###autoload
+(defun resnippets-define-interactive (regex expansion props label file)
+  "Interactively define a snippet and save it to the project file.
+REGEX is the trigger regex.
+EXPANSION is the snippet content.
+PROPS are optional properties as a string, e.g., \":word-boundary t :suffix t\".
+LABEL is the group label.
+FILE is the project file to save to (\".resnippets.el\")."
+  (interactive
+   (let* ((def-exp (resnippets--snippet-at-point))
+          (reg (read-string "Trigger regex: "))
+          (exp (read-string (format "Expansion (default %s): " (if (string-empty-p def-exp) "empty" def-exp))
+                            nil nil def-exp))
+          (prp (read-string "Properties (e.g. :word-boundary t): "))
+          (lbl (read-string "Group label (optional): "))
+          (def-file (or (resnippets--find-project-file)
+                        (expand-file-name resnippets-project-file default-directory)))
+          (prj (read-file-name "Save to file: " (file-name-directory def-file) def-file nil (file-name-nondirectory def-file))))
+     (list reg exp prp lbl prj)))
+
+  (when (string-empty-p regex)
+    (user-error "Regex cannot be empty"))
+
+  (with-current-buffer (find-file-noselect file)
+    (save-excursion
+      (let ((append-add t))
+        (when (not (string-empty-p label))
+          (goto-char (point-min))
+          (let ((search-str (format "(resnippets-define %S" label)))
+            (if (search-forward search-str nil t)
+                (progn
+                  (goto-char (match-beginning 0))
+                  (forward-sexp 1)
+                  (backward-char 1)
+                  (insert "\n  ")
+                  (insert (format "(%S %S" regex expansion))
+                  (when (not (string-empty-p props))
+                    (insert " " props))
+                  (insert ")")
+                  (setq append-add nil))
+              ;; Group not found, create new group at end
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n"))
+              (insert (format "\n(resnippets-define %S nil\n  (%S %S" label regex expansion))
+              (when (not (string-empty-p props))
+                (insert " " props))
+              (insert "))\n")
+              (setq append-add nil))))
+
+        (when append-add
+          (goto-char (point-max))
+          (unless (bolp) (insert "\n"))
+          (insert (format "(resnippets-add %S %S" regex expansion))
+          (when (not (string-empty-p props))
+            (insert " " props))
+          (insert ")\n"))))
+    (save-buffer))
+  (message "Snippet %S defined and saved to %s" regex file))
+
 (provide 'resnippets)
 ;;; resnippets.el ends here

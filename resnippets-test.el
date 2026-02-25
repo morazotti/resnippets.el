@@ -773,3 +773,34 @@
           (should (= (length resnippets--snippets) 0))
           (should (null (member file resnippets--loaded-project-files))))
       (ignore-errors (delete-directory dir t)))))
+
+;; Tests for resnippets-define-interactive
+
+(ert-deftest resnippets-test-define-interactive ()
+  "Test appending snippets to project file via interactive definition command."
+  (let* ((dir (make-temp-file "resnippets-define-" t))
+         (file (expand-file-name ".resnippets.el" dir)))
+    (unwind-protect
+        (progn
+          ;; 1. Add standalone snippet
+          (resnippets-define-interactive "r1" "e1" ":priority 10" "" file)
+          (let ((content (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+            (should (string-match "(resnippets-add \"r1\" \"e1\" :priority 10)" content)))
+
+          ;; 2. Add snippet to new group
+          (resnippets-define-interactive "r2" "e2" "" "G1" file)
+          (let ((content (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+            (should (string-match "(resnippets-define \"G1\" nil" content))
+            (should (string-match "(\"r2\" \"e2\")" content)))
+
+          ;; 3. Add snippet to existing group
+          (resnippets-define-interactive "r3" "e3" ":suffix t" "G1" file)
+          (let ((content (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+            (should (string-match "(resnippets-define \"G1\" nil\n *(\"r2\" \"e2\")\n *(\"r3\" \"e3\" :suffix t))" content))))
+      (ignore-errors (delete-directory dir t)))))

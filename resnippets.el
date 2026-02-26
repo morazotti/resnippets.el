@@ -1,6 +1,6 @@
 ;;; resnippets.el --- Regex-based snippets for Emacs -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024  Morazotti
+;; Copyright (C) 2026  Morazotti
 
 ;; Author: Morazotti
 ;; Keywords: convenience, snippets, regex
@@ -13,6 +13,8 @@
 ;; fixed keywords.
 
 ;;; Code:
+
+(require 'cl-lib)
 
 (defgroup resnippets nil
   "Regex-based snippets."
@@ -59,13 +61,13 @@ Example:
   ;; Auto-scope when loading from a project file
   (when resnippets--current-project-root
     (let* ((root resnippets--current-project-root)
-           (label (resnippets--project-label root))
+           (plabel (resnippets--project-label root))
            (existing-condition (plist-get props :condition))
            (dir-condition `(string-prefix-p ,root default-directory))
            (combined-condition (if existing-condition
                                   `(and ,dir-condition ,existing-condition)
                                 dir-condition)))
-      (setq props (plist-put props :label label))
+      (setq props (plist-put props :project-label plabel))
       (setq props (plist-put props :condition combined-condition))))
   (let ((explist (if (listp expansion) expansion (list expansion))))
     (push (append (list regex explist) props) resnippets--snippets)))
@@ -82,6 +84,13 @@ Example:
   (setq resnippets--snippets
         (cl-remove-if (lambda (entry)
                         (string= (plist-get (cddr entry) :label) label))
+                      resnippets--snippets)))
+
+(defun resnippets-remove-by-project (plabel)
+  "Remove all snippets from the given project label PLABEL."
+  (setq resnippets--snippets
+        (cl-remove-if (lambda (entry)
+                        (string= (plist-get (cddr entry) :project-label) plabel))
                       resnippets--snippets)))
 
 (defun resnippets-clear ()
@@ -290,7 +299,10 @@ When :chain is t, after expansion, check for more snippet matches."
   :lighter " ReSnip"
   (if resnippets-mode
       (progn
-        (add-hook 'post-self-insert-hook #'resnippets--post-command-handler nil t)
+        ;; Append to the end of the hook list so that auto-pair modes like
+        ;; smartparens or electric-pair-mode don't erroneously trigger on the
+        ;; expanded parens inserted by resnippets.
+        (add-hook 'post-self-insert-hook #'resnippets--post-command-handler t t)
         (add-hook 'after-save-hook #'resnippets--after-save-handler)
         (resnippets--load-project-file))
     (remove-hook 'post-self-insert-hook #'resnippets--post-command-handler t)))
@@ -328,13 +340,13 @@ If the file has been deleted, removes the previously loaded snippets."
     (if file
         (let ((dir (file-name-directory file)))
           ;; Remove old snippets from this project
-          (resnippets-remove-by-label (resnippets--project-label dir))
+          (resnippets-remove-by-project (resnippets--project-label dir))
           (setq resnippets--loaded-project-files
                 (delete file resnippets--loaded-project-files))
           (resnippets--load-project-file))
       ;; File not found — clean up any previously loaded project snippets
       (let ((dir (file-name-as-directory default-directory)))
-        (resnippets-remove-by-label (resnippets--project-label dir))
+        (resnippets-remove-by-project (resnippets--project-label dir))
         (setq resnippets--loaded-project-files
               (cl-remove-if (lambda (f) (string-prefix-p dir f))
                             resnippets--loaded-project-files))
@@ -367,7 +379,7 @@ EVENT is the file-notify event."
       ((or 'changed 'renamed)
        (when (file-exists-p file)
          (let ((dir (file-name-directory file)))
-           (resnippets-remove-by-label (resnippets--project-label dir))
+           (resnippets-remove-by-project (resnippets--project-label dir))
            (setq resnippets--loaded-project-files
                  (delete file resnippets--loaded-project-files))
            (let ((resnippets--current-project-root dir))
@@ -376,7 +388,7 @@ EVENT is the file-notify event."
            (message "Resnippets: hot-reloaded %s" file))))
       ('deleted
        (let ((dir (file-name-directory file)))
-         (resnippets-remove-by-label (resnippets--project-label dir))
+         (resnippets-remove-by-project (resnippets--project-label dir))
          (setq resnippets--loaded-project-files
                (delete file resnippets--loaded-project-files))
          (resnippets--remove-watch file)
@@ -406,7 +418,7 @@ This provides reliable hot reload without depending on `file-notify'."
                       resnippets-project-file))
     (let ((file buffer-file-name)
           (dir (file-name-directory buffer-file-name)))
-      (resnippets-remove-by-label (resnippets--project-label dir))
+      (resnippets-remove-by-project (resnippets--project-label dir))
       (setq resnippets--loaded-project-files
             (delete file resnippets--loaded-project-files))
       (let ((resnippets--current-project-root dir))
@@ -585,7 +597,12 @@ FILE is the project file to save to (\".resnippets.el\")."
           (exp (read-string (format "Expansion (default %s): " (if (string-empty-p def-exp) "empty" def-exp))
                             nil nil def-exp))
           (prp (read-string "Properties (e.g. :word-boundary t): "))
-          (lbl (read-string "Group label (optional): "))
+          (lbl (let ((raw (read-string "Group label (optional): ")))
+                 (if (string-empty-p raw)
+                     ""
+                   (if (string-prefix-p "local:" raw)
+                       raw
+                     (concat "local:" raw)))))
           (def-file (or (resnippets--find-project-file)
                         (expand-file-name resnippets-project-file default-directory)))
           (prj (read-file-name "Save to file: " (file-name-directory def-file) def-file nil (file-name-nondirectory def-file))))
@@ -594,13 +611,18 @@ FILE is the project file to save to (\".resnippets.el\")."
   (when (string-empty-p regex)
     (user-error "Regex cannot be empty"))
 
+  ;; Ensure label has "local:" prefix unless it's empty or already prefixed
+  (setq label (if (or (string-empty-p label) (string-prefix-p "local:" label))
+                  label
+                (concat "local:" label)))
+
   (with-current-buffer (find-file-noselect file)
     (save-excursion
       (let ((append-add t))
         (when (not (string-empty-p label))
           (goto-char (point-min))
-          (let ((search-str (format "(resnippets-define %S" label)))
-            (if (search-forward search-str nil t)
+          (let ((search-regex (format "^\\s-*(resnippets-define\\s-+%S" label)))
+            (if (re-search-forward search-regex nil t)
                 (progn
                   (goto-char (match-beginning 0))
                   (forward-sexp 1)
@@ -614,7 +636,22 @@ FILE is the project file to save to (\".resnippets.el\")."
               ;; Group not found, create new group at end
               (goto-char (point-max))
               (unless (bolp) (insert "\n"))
-              (insert (format "\n(resnippets-define %S nil\n  (%S %S" label regex expansion))
+              (insert (format "\n(resnippets-define %S nil\n" label))
+              (let ((existing-snippets
+                     (cl-remove-if-not (lambda (s)
+                                         (and (string= (plist-get (cddr s) :label) label)
+                                              (not (string= (car s) regex))))
+                                       resnippets--snippets)))
+                (dolist (s (reverse existing-snippets))
+                  (let* ((reg (car s))
+                         (exp (cadr s))
+                         (exp-output (if (and (listp exp)
+                                              (= (length exp) 1)
+                                              (stringp (car exp)))
+                                         (car exp)
+                                       (if (listp exp) (list 'quote exp) exp))))
+                    (insert (format "  (%S %S)\n" reg exp-output)))))
+              (insert (format "  (%S %S" regex expansion))
               (when (not (string-empty-p props))
                 (insert " " props))
               (insert "))\n")

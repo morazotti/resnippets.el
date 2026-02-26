@@ -583,12 +583,12 @@
             (resnippets--load-project-file)
             ;; Should have loaded the snippet
             (should (= (length resnippets--snippets) 1))
-            ;; Should have a project label
+            ;; Verify auto-scoping properties were applied
             (let* ((snippet (car resnippets--snippets))
                    (props (cddr snippet)))
-              (should (string-prefix-p "project:" (plist-get props :label)))
-              ;; Should have a directory condition
-              (should (plist-get props :condition)))
+              (should (string-prefix-p "project:" (plist-get props :project-label)))
+              (should (equal (plist-get props :condition)
+                             `(string-prefix-p ,(file-name-directory file) default-directory))))
             ;; Should be tracked as loaded
             (should (member file resnippets--loaded-project-files))
             ;; Second call should NOT reload
@@ -794,13 +794,13 @@
           (let ((content (with-temp-buffer
                            (insert-file-contents file)
                            (buffer-string))))
-            (should (string-match "(resnippets-define \"G1\" nil" content))
-            (should (string-match "(\"r2\" \"e2\")" content)))
+            (should (string-match-p "(resnippets-define \"local:G1\" nil" content))
+            (should (string-match-p "(\"r2\" \"e2\")" content)))
 
           ;; 3. Add snippet to existing group
           (resnippets-define-interactive "r3" "e3" ":suffix t" "G1" file)
           (let ((content (with-temp-buffer
                            (insert-file-contents file)
                            (buffer-string))))
-            (should (string-match "(resnippets-define \"G1\" nil\n *(\"r2\" \"e2\")\n *(\"r3\" \"e3\" :suffix t))" content))))
+            (should (string-match-p "(resnippets-define \"local:G1\" nil\n *(\"r2\" \"e2\")\n *(\"r3\" \"e3\" :suffix t))" content))))
       (ignore-errors (delete-directory dir t)))))

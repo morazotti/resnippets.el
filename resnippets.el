@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(eval-when-compile (require 'wid-edit))
 
 (defgroup resnippets nil
   "Regex-based snippets."
@@ -667,5 +668,241 @@ FILE is the project file to save to (\".resnippets.el\")."
     (save-buffer))
   (message "Snippet %S defined and saved to %s" regex file))
 
+
+;;; Interactive Snippet Creation Form
+
+(defgroup resnippets-interactive nil
+  "Interactive snippet creation helpers."
+  :group 'resnippets)
+
+(defcustom resnippets-snippet-file "~/.resnippets"
+  "Default file where `resnippets-new-snippet' saves new snippets.
+The file uses standard Elisp format with `resnippets-add' calls
+and can be loaded with `resnippets-load'."
+  :type 'file
+  :group 'resnippets-interactive)
+
+(defvar-local resnippets-new-snippet--widgets nil
+  "Alist mapping widget names to widget objects in the form buffer.")
+
+(defvar resnippets-new-snippet--keymap nil
+  "Keymap for the `resnippets-new-snippet' form buffer.
+Initialized lazily on first use.")
+
+(defun resnippets-new-snippet--get (key)
+  "Return the current value of widget KEY in the form buffer."
+  (let ((w (cdr (assq key resnippets-new-snippet--widgets))))
+    (when w (widget-value w))))
+
+(defun resnippets-new-snippet--render ()
+  "Render the new-snippet form with fields and option checkboxes."
+  (let ((widgets nil))
+    (widget-insert (propertize "━━━ Resnippets: New Snippet ━━━\n\n"
+                               'face 'bold))
+    ;; Required fields
+    (widget-insert "Trigger (regex):  ")
+    (push (cons 'trigger (widget-create 'editable-field :size 40 ""))
+          widgets)
+    (widget-insert "\n")
+
+    (widget-insert "Expansion:        ")
+    (push (cons 'expansion (widget-create 'editable-field :size 40 ""))
+          widgets)
+    (widget-insert "\n")
+
+    (widget-insert "Label (group):    ")
+    (push (cons 'label (widget-create 'editable-field :size 40 ""))
+          widgets)
+    (widget-insert "\n")
+
+    (widget-insert "File:             ")
+    (push (cons 'file (widget-create 'editable-field :size 40
+                                     (expand-file-name resnippets-snippet-file)))
+          widgets)
+    (widget-insert "\n\n")
+
+    ;; Boolean options
+    (widget-insert (propertize "Options:\n" 'face 'bold))
+
+    (widget-insert "  ")
+    (push (cons 'word-boundary (widget-create 'checkbox nil)) widgets)
+    (widget-insert " :word-boundary    Match only at word boundaries\n")
+
+    (widget-insert "  ")
+    (push (cons 'suffix (widget-create 'checkbox nil)) widgets)
+    (widget-insert " :suffix           Expand only after non-alphabetic char\n")
+
+    (widget-insert "  ")
+    (push (cons 'match-case (widget-create 'checkbox nil)) widgets)
+    (widget-insert " :match-case       Preserve the case pattern of input\n")
+
+    (widget-insert "  ")
+    (push (cons 'chain (widget-create 'checkbox nil)) widgets)
+    (widget-insert " :chain            Trigger further matches after expansion\n\n")
+
+    ;; Priority
+    (widget-insert "  Priority: ")
+    (push (cons 'priority (widget-create 'editable-field :size 5 "0"))
+          widgets)
+    (widget-insert "\n\n")
+
+    ;; Mode option
+    (widget-insert "  ")
+    (push (cons 'mode-enable (widget-create 'checkbox nil)) widgets)
+    (widget-insert " :mode             Restrict to specific mode(s)\n")
+    (widget-insert "    Mode(s): ")
+    (push (cons 'mode (widget-create 'editable-field :size 35 ""))
+          widgets)
+    (widget-insert "\n\n")
+
+    ;; Condition option
+    (widget-insert "  ")
+    (push (cons 'condition-enable (widget-create 'checkbox nil)) widgets)
+    (widget-insert " :condition        Restrict with custom condition\n")
+    (widget-insert "    Condition: ")
+    (push (cons 'condition (widget-create 'editable-field :size 35 ""))
+          widgets)
+    (widget-insert "\n\n")
+
+    ;; Footer
+    (widget-insert (propertize "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                               'face 'shadow))
+    (widget-insert (propertize "[C-c C-c] Save   [C-c C-k] Cancel\n"
+                               'face 'shadow))
+
+    (setq-local resnippets-new-snippet--widgets (nreverse widgets))))
+
+;;;###autoload
+(defun resnippets-new-snippet ()
+  "Open an interactive form to create and save a new snippet.
+The form displays all available snippet options as checkboxes and
+editable fields.  The snippet is saved to the file shown in the form
+\(default `resnippets-snippet-file') and registered in the current
+Emacs session.
+
+Use \\`C-c C-c' to save, \\`C-c C-k' to cancel."
+  (interactive)
+  (require 'wid-edit)
+  (unless resnippets-new-snippet--keymap
+    (setq resnippets-new-snippet--keymap (copy-keymap widget-keymap))
+    (define-key resnippets-new-snippet--keymap (kbd "C-c C-c")
+                #'resnippets-new-snippet--save)
+    (define-key resnippets-new-snippet--keymap (kbd "C-c C-k")
+                #'resnippets-new-snippet--cancel))
+  (let ((buf (get-buffer-create "*Resnippets New Snippet*")))
+    (switch-to-buffer buf)
+    (kill-all-local-variables)
+    (let ((inhibit-read-only t))
+      (erase-buffer))
+    (remove-overlays)
+    (resnippets-new-snippet--render)
+    (use-local-map resnippets-new-snippet--keymap)
+    (widget-setup)
+    (goto-char (point-min))
+    (widget-forward 1)))
+
+(defun resnippets-new-snippet--build-props-string
+    (word-boundary suffix match-case chain priority
+     mode-enable mode-str cond-enable cond-str)
+  "Build a properties string from the form values.
+WORD-BOUNDARY, SUFFIX, MATCH-CASE, CHAIN are booleans.
+PRIORITY is a number.  MODE-ENABLE and COND-ENABLE are booleans.
+MODE-STR and COND-STR are strings."
+  (let ((parts nil))
+    (when word-boundary (push ":word-boundary t" parts))
+    (when suffix (push ":suffix t" parts))
+    (when match-case (push ":match-case t" parts))
+    (when chain (push ":chain t" parts))
+    (when (/= priority 0)
+      (push (format ":priority %d" priority) parts))
+    (when (and mode-enable (not (string-empty-p mode-str)))
+      (push (format ":mode %s" mode-str) parts))
+    (when (and cond-enable (not (string-empty-p cond-str)))
+      (push (format ":condition %s" cond-str) parts))
+    (string-join (nreverse parts) " ")))
+
+(defun resnippets-new-snippet--build-add-args
+    (trigger expansion word-boundary suffix match-case chain priority
+     mode-enable mode-str cond-enable cond-str label)
+  "Build argument list for `resnippets-add' from form values.
+TRIGGER and EXPANSION are strings.
+WORD-BOUNDARY, SUFFIX, MATCH-CASE, CHAIN are booleans.
+PRIORITY is a number.  MODE-ENABLE and COND-ENABLE are booleans.
+MODE-STR and COND-STR are strings.  LABEL is a string or empty."
+  (let ((args (list trigger expansion)))
+    (when word-boundary
+      (setq args (append args '(:word-boundary t))))
+    (when suffix
+      (setq args (append args '(:suffix t))))
+    (when match-case
+      (setq args (append args '(:match-case t))))
+    (when chain
+      (setq args (append args '(:chain t))))
+    (when (/= priority 0)
+      (setq args (append args (list :priority priority))))
+    (when (and mode-enable (not (string-empty-p mode-str)))
+      (condition-case nil
+          (setq args (append args (list :mode (read mode-str))))
+        (error
+         (message "Warning: could not parse mode '%s'" mode-str))))
+    (when (and cond-enable (not (string-empty-p cond-str)))
+      (condition-case nil
+          (setq args (append args (list :condition (read cond-str))))
+        (error
+         (message "Warning: could not parse condition '%s'" cond-str))))
+    (when (not (string-empty-p label))
+      (setq args (append args (list :label label))))
+    args))
+
+(defun resnippets-new-snippet--save ()
+  "Save the snippet defined in the current form buffer.
+Writes the snippet to the specified file using
+`resnippets-define-interactive' and registers it in the current
+Emacs session via `resnippets-add'."
+  (interactive)
+  (let* ((trigger (string-trim (resnippets-new-snippet--get 'trigger)))
+         (expansion (string-trim (resnippets-new-snippet--get 'expansion)))
+         (label-raw (string-trim (resnippets-new-snippet--get 'label)))
+         (file (expand-file-name
+                (string-trim (resnippets-new-snippet--get 'file))))
+         (word-boundary (resnippets-new-snippet--get 'word-boundary))
+         (suffix (resnippets-new-snippet--get 'suffix))
+         (match-case (resnippets-new-snippet--get 'match-case))
+         (chain (resnippets-new-snippet--get 'chain))
+         (priority (string-to-number
+                    (string-trim (resnippets-new-snippet--get 'priority))))
+         (mode-enable (resnippets-new-snippet--get 'mode-enable))
+         (mode-str (string-trim (resnippets-new-snippet--get 'mode)))
+         (cond-enable (resnippets-new-snippet--get 'condition-enable))
+         (cond-str (string-trim (resnippets-new-snippet--get 'condition))))
+    ;; Validate required fields
+    (when (string-empty-p trigger)
+      (user-error "Trigger (regex) cannot be empty"))
+    (when (string-empty-p expansion)
+      (user-error "Expansion cannot be empty"))
+    (let* ((props-string (resnippets-new-snippet--build-props-string
+                          word-boundary suffix match-case chain priority
+                          mode-enable mode-str cond-enable cond-str))
+           (label (cond
+                   ((string-empty-p label-raw) "")
+                   ((string-prefix-p "local:" label-raw) label-raw)
+                   (t (concat "local:" label-raw)))))
+      ;; Write to file
+      (resnippets-define-interactive trigger expansion props-string label file)
+      ;; Register in current session
+      (apply #'resnippets-add
+             (resnippets-new-snippet--build-add-args
+              trigger expansion word-boundary suffix match-case chain
+              priority mode-enable mode-str cond-enable cond-str label)))
+    ;; Close the form buffer
+    (kill-buffer (current-buffer))))
+
+(defun resnippets-new-snippet--cancel ()
+  "Cancel snippet creation and close the form buffer."
+  (interactive)
+  (kill-buffer (current-buffer))
+  (message "Snippet creation cancelled"))
+
 (provide 'resnippets)
 ;;; resnippets.el ends here
+

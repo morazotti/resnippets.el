@@ -804,3 +804,215 @@
                            (buffer-string))))
             (should (string-match-p "(resnippets-define \"local:G1\" nil\n *(\"r2\" \"e2\")\n *(\"r3\" \"e3\" :suffix t))" content))))
       (ignore-errors (delete-directory dir t)))))
+
+;; Tests for resnippets-new-snippet
+
+(ert-deftest resnippets-test-new-snippet-buffer-creation ()
+  "Test that the new-snippet form buffer is created with all elements."
+  (unwind-protect
+      (progn
+        (resnippets-new-snippet)
+        (with-current-buffer "*Resnippets New Snippet*"
+          (let ((content (buffer-string)))
+            ;; Check header
+            (should (string-match "Resnippets: New Snippet" content))
+            ;; Check fields
+            (should (string-match "Trigger (regex):" content))
+            (should (string-match "Expansion:" content))
+            (should (string-match "Label (group):" content))
+            (should (string-match "File:" content))
+            ;; Check options
+            (should (string-match ":word-boundary" content))
+            (should (string-match ":suffix" content))
+            (should (string-match ":match-case" content))
+            (should (string-match ":chain" content))
+            (should (string-match "Priority:" content))
+            (should (string-match ":mode" content))
+            (should (string-match ":condition" content))
+            ;; Check footer
+            (should (string-match "C-c C-c.*Save" content))
+            (should (string-match "C-c C-k.*Cancel" content))
+            ;; Check widgets were created
+            (should resnippets-new-snippet--widgets)
+            (should (assq 'trigger resnippets-new-snippet--widgets))
+            (should (assq 'expansion resnippets-new-snippet--widgets))
+            (should (assq 'suffix resnippets-new-snippet--widgets))
+            (should (assq 'word-boundary resnippets-new-snippet--widgets)))))
+    (when (get-buffer "*Resnippets New Snippet*")
+      (kill-buffer "*Resnippets New Snippet*"))))
+
+(ert-deftest resnippets-test-new-snippet-cancel ()
+  "Test that cancel closes the form buffer."
+  (resnippets-new-snippet)
+  (should (get-buffer "*Resnippets New Snippet*"))
+  (with-current-buffer "*Resnippets New Snippet*"
+    (resnippets-new-snippet--cancel))
+  (should-not (get-buffer "*Resnippets New Snippet*")))
+
+(ert-deftest resnippets-test-new-snippet-save-basic ()
+  "Test that saving creates the snippet in file and session."
+  (let* ((dir (make-temp-file "resnippets-new-" t))
+         (file (expand-file-name "test-snippets" dir))
+         (resnippets--snippets nil)
+         (resnippets-snippet-file file))
+    (unwind-protect
+        (progn
+          (resnippets-new-snippet)
+          (with-current-buffer "*Resnippets New Snippet*"
+            ;; Set widget values
+            (widget-value-set
+             (cdr (assq 'trigger resnippets-new-snippet--widgets)) "hello")
+            (widget-value-set
+             (cdr (assq 'expansion resnippets-new-snippet--widgets)) "world")
+            (widget-value-set
+             (cdr (assq 'file resnippets-new-snippet--widgets)) file)
+            ;; Save
+            (resnippets-new-snippet--save))
+          ;; Buffer should be closed
+          (should-not (get-buffer "*Resnippets New Snippet*"))
+          ;; Verify file was created with correct content
+          (let ((content (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+            (should (string-match-p "resnippets-add.*\"hello\".*\"world\"" content)))
+          ;; Verify snippet was registered in session
+          (should (cl-find "hello" resnippets--snippets
+                           :key #'car :test #'string=)))
+      (ignore-errors (delete-directory dir t))
+      (when-let ((buf (find-buffer-visiting file)))
+        (kill-buffer buf))
+      (when (get-buffer "*Resnippets New Snippet*")
+        (kill-buffer "*Resnippets New Snippet*")))))
+
+(ert-deftest resnippets-test-new-snippet-save-with-options ()
+  "Test that saving with options creates correct props."
+  (let* ((dir (make-temp-file "resnippets-new-" t))
+         (file (expand-file-name "test-snippets-opts" dir))
+         (resnippets--snippets nil)
+         (resnippets-snippet-file file))
+    (unwind-protect
+        (progn
+          (resnippets-new-snippet)
+          (with-current-buffer "*Resnippets New Snippet*"
+            ;; Set required fields
+            (widget-value-set
+             (cdr (assq 'trigger resnippets-new-snippet--widgets)) "cao")
+            (widget-value-set
+             (cdr (assq 'expansion resnippets-new-snippet--widgets)) "cão")
+            (widget-value-set
+             (cdr (assq 'file resnippets-new-snippet--widgets)) file)
+            ;; Enable options
+            (widget-value-set
+             (cdr (assq 'suffix resnippets-new-snippet--widgets)) t)
+            (widget-value-set
+             (cdr (assq 'word-boundary resnippets-new-snippet--widgets)) t)
+            (widget-value-set
+             (cdr (assq 'match-case resnippets-new-snippet--widgets)) t)
+            ;; Save
+            (resnippets-new-snippet--save))
+          ;; Verify file content has the options
+          (let ((content (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+            (should (string-match-p ":word-boundary t" content))
+            (should (string-match-p ":suffix t" content))
+            (should (string-match-p ":match-case t" content)))
+          ;; Verify session snippet has options
+          (let* ((snippet (cl-find "cao" resnippets--snippets
+                                   :key #'car :test #'string=))
+                 (props (cddr snippet)))
+            (should (plist-get props :suffix))
+            (should (plist-get props :word-boundary))
+            (should (plist-get props :match-case))))
+      (ignore-errors (delete-directory dir t))
+      (when-let ((buf (find-buffer-visiting file)))
+        (kill-buffer buf))
+      (when (get-buffer "*Resnippets New Snippet*")
+        (kill-buffer "*Resnippets New Snippet*")))))
+
+(ert-deftest resnippets-test-new-snippet-validation ()
+  "Test that empty trigger raises an error."
+  (let ((resnippets-snippet-file "/tmp/test-validation"))
+    (unwind-protect
+        (progn
+          (resnippets-new-snippet)
+          (with-current-buffer "*Resnippets New Snippet*"
+            ;; Try to save with empty trigger
+            (should-error (resnippets-new-snippet--save) :type 'user-error)))
+      (when (get-buffer "*Resnippets New Snippet*")
+        (kill-buffer "*Resnippets New Snippet*")))))
+
+(ert-deftest resnippets-test-new-snippet-save-with-group ()
+  "Test saving a snippet with a group label."
+  (let* ((dir (make-temp-file "resnippets-new-" t))
+         (file (expand-file-name "test-snippets-grp" dir))
+         (resnippets--snippets nil)
+         (resnippets-snippet-file file))
+    (unwind-protect
+        (progn
+          (resnippets-new-snippet)
+          (with-current-buffer "*Resnippets New Snippet*"
+            (widget-value-set
+             (cdr (assq 'trigger resnippets-new-snippet--widgets)) "grp1")
+            (widget-value-set
+             (cdr (assq 'expansion resnippets-new-snippet--widgets)) "GROUP1")
+            (widget-value-set
+             (cdr (assq 'label resnippets-new-snippet--widgets)) "my-group")
+            (widget-value-set
+             (cdr (assq 'file resnippets-new-snippet--widgets)) file)
+            (resnippets-new-snippet--save))
+          ;; Verify file has resnippets-define with local: prefix
+          (let ((content (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string))))
+            (should (string-match-p "resnippets-define.*\"local:my-group\"" content))
+            (should (string-match-p "(\"grp1\" \"GROUP1\")" content)))
+          ;; Verify session registration with label
+          (let* ((snippet (cl-find "grp1" resnippets--snippets
+                                   :key #'car :test #'string=))
+                 (props (cddr snippet)))
+            (should (equal (plist-get props :label) "local:my-group"))))
+      (ignore-errors (delete-directory dir t))
+      (when-let ((buf (find-buffer-visiting file)))
+        (kill-buffer buf))
+      (when (get-buffer "*Resnippets New Snippet*")
+        (kill-buffer "*Resnippets New Snippet*")))))
+
+(ert-deftest resnippets-test-new-snippet-build-props-string ()
+  "Test building props string from form values."
+  ;; No options
+  (should (equal (resnippets-new-snippet--build-props-string
+                  nil nil nil nil 0 nil "" nil "")
+                 ""))
+  ;; All boolean options
+  (should (equal (resnippets-new-snippet--build-props-string
+                  t t t t 0 nil "" nil "")
+                 ":word-boundary t :suffix t :match-case t :chain t"))
+  ;; Priority
+  (should (equal (resnippets-new-snippet--build-props-string
+                  nil nil nil nil 10 nil "" nil "")
+                 ":priority 10"))
+  ;; Mode
+  (should (equal (resnippets-new-snippet--build-props-string
+                  nil nil nil nil 0 t "'org-mode" nil "")
+                 ":mode 'org-mode"))
+  ;; Combined
+  (should (equal (resnippets-new-snippet--build-props-string
+                  t nil nil nil 5 t "'org-mode" nil "")
+                 ":word-boundary t :priority 5 :mode 'org-mode")))
+
+(ert-deftest resnippets-test-new-snippet-build-add-args ()
+  "Test building resnippets-add argument list."
+  ;; Basic
+  (should (equal (resnippets-new-snippet--build-add-args
+                  "foo" "bar" nil nil nil nil 0 nil "" nil "" "")
+                 '("foo" "bar")))
+  ;; With options
+  (let ((args (resnippets-new-snippet--build-add-args
+               "foo" "bar" t t nil nil 5 nil "" nil "" "my-label")))
+    (should (equal (nth 0 args) "foo"))
+    (should (equal (nth 1 args) "bar"))
+    (should (plist-get (cddr args) :word-boundary))
+    (should (plist-get (cddr args) :suffix))
+    (should (equal (plist-get (cddr args) :priority) 5))
+    (should (equal (plist-get (cddr args) :label) "my-label"))))

@@ -238,50 +238,60 @@ When MATCH-CASE is non-nil, apply the detected case pattern to strings."
 
 (defun resnippets--check ()
   "Check if the text before point matches any registered snippet.
-When multiple snippets match, the one with highest :priority wins (default 0).
+When multiple snippets match, the one with highest :priority wins (default 0);
+on ties, the snippet registered first wins.
 When :word-boundary is t, the snippet only matches at word boundaries.
 When :suffix is t, the snippet only expands after a non-alphabetic character is typed.
-When :chain is t, after expansion, check for more snippet matches."
+When :chain is t, after expansion, check for more snippet matches.
+
+The regex is tried first; :mode and :condition are only evaluated for
+snippets whose regex matched and that could still beat the current
+winner.  Each distinct (:mode . :condition) pair is evaluated at most
+once per call, so snippets sharing a group condition share its cost."
   (let* ((limit (max (point-min) (- (point) resnippets-lookback-limit)))
          (text-to-check (buffer-substring-no-properties limit (point)))
-         (matches nil))
-    ;; Collect all matching snippets
-    (cl-loop for (regex expansion . props) in resnippets--snippets
-             for match-case = (plist-get props :match-case)
-             for word-boundary = (plist-get props :word-boundary)
-             for suffix = (plist-get props :suffix)
-             for case-fold-search = match-case
-             for base-regex = (if word-boundary
-                                  (concat "\\_<" regex)
-                                regex)
-             for effective-regex = (if suffix
-                                      (concat base-regex "\\(?:[^a-zA-Z]\\)")
-                                    base-regex)
-             when (and (resnippets--check-condition props)
-                       (string-match (concat effective-regex "\\'") text-to-check))
-             do (push (list (match-data) expansion props) matches))
-    ;; Sort by priority (highest first) and expand the winner
-    (when matches
-      (let* ((sorted (sort matches
-                           (lambda (a b)
-                             (> (or (plist-get (nth 2 a) :priority) 0)
-                                (or (plist-get (nth 2 b) :priority) 0)))))
-             (winner (car sorted))
-             (data (nth 0 winner))
+         (condition-cache nil)
+         (winner nil)
+         (winner-priority nil))
+    (dolist (snippet resnippets--snippets)
+      (let* ((props (cddr snippet))
+             (priority (or (plist-get props :priority) 0))
+             (case-fold-search (plist-get props :match-case)))
+        ;; `resnippets--snippets' is newest-first, so `>=' lets an older
+        ;; snippet take over a tie, keeping first-registered-wins semantics.
+        (when (and (or (null winner-priority) (>= priority winner-priority))
+                   (string-match
+                    (concat (if (plist-get props :word-boundary) "\\_<" "")
+                            (car snippet)
+                            (if (plist-get props :suffix) "\\(?:[^a-zA-Z]\\)" "")
+                            "\\'")
+                    text-to-check))
+          (let* ((data (match-data))
+                 (key (cons (plist-get props :mode) (plist-get props :condition)))
+                 (cached (assoc key condition-cache))
+                 (active (if cached
+                             (cdr cached)
+                           (let ((result (resnippets--check-condition props)))
+                             (push (cons key result) condition-cache)
+                             result))))
+            (when active
+              (setq winner (list data (cadr snippet) props)
+                    winner-priority priority))))))
+    (when winner
+      (let* ((data (nth 0 winner))
              (expansion (nth 1 winner))
              (props (nth 2 winner))
-             (match-case (plist-get props :match-case))
-             (suffix (plist-get props :suffix))
-             (chain (plist-get props :chain)))
-        (resnippets--expand text-to-check data expansion match-case)
+             (suffix (plist-get props :suffix)))
+        (resnippets--expand text-to-check data expansion
+                            (plist-get props :match-case))
         ;; Re-insert the suffix character that was consumed
         (when suffix
           ;; Suffix char is the last char of group 0 match
-          (let* ((match-end (nth 1 data))
-                 (suffix-char (substring text-to-check (1- match-end) match-end)))
-            (insert suffix-char)))
+          (let ((match-end (nth 1 data)))
+            (insert (substring text-to-check (1- match-end) match-end))))
         ;; Chain: try to match more snippets after expansion
-        (when (and chain (< resnippets--chain-depth resnippets-max-chain-depth))
+        (when (and (plist-get props :chain)
+                   (< resnippets--chain-depth resnippets-max-chain-depth))
           (let ((resnippets--chain-depth (1+ resnippets--chain-depth)))
             (resnippets--check)))
         t))))

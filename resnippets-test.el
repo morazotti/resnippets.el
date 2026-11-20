@@ -385,6 +385,50 @@
       (should (resnippets--check))
       (should (equal (buffer-string) "has-priority")))))
 
+(ert-deftest resnippets-test-priority-tie-first-registered-wins ()
+  "Test that among equal priorities the first registered snippet wins."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-add "test" "first")
+      (resnippets-add "test" "second")
+      (insert "test")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "first")))))
+
+(ert-deftest resnippets-test-priority-inactive-winner-falls-back ()
+  "Test that a matching higher-priority snippet with a false condition
+does not block a lower-priority active one."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil))
+      (resnippets-add "test" "low")
+      (resnippets-add "test" "high" :priority 10 :condition '(eq 1 2))
+      (insert "test")
+      (should (resnippets--check))
+      (should (equal (buffer-string) "low")))))
+
+(defvar resnippets-test--condition-calls 0
+  "Number of times the counting test condition was evaluated.")
+
+(ert-deftest resnippets-test-condition-evaluated-lazily ()
+  "Test that conditions only run for matching regexes, once per distinct form."
+  (with-temp-buffer
+    (resnippets-mode 1)
+    (let ((resnippets--snippets nil)
+          (resnippets-test--condition-calls 0))
+      (resnippets-define '(:condition (cl-incf resnippets-test--condition-calls))
+        ("foo" "FOO")
+        ("\\([a-z]*\\)oo" '("X" 1))
+        ("o" "O"))
+      (insert "bar")
+      (should-not (resnippets--check))
+      (should (= resnippets-test--condition-calls 0))
+      (insert " foo")
+      (should (resnippets--check))
+      (should (= resnippets-test--condition-calls 1))
+      (should (equal (buffer-string) "bar FOO")))))
+
 (ert-deftest resnippets-test-define-per-snippet-props ()
   "Test that per-snippet props override shared props in resnippets-define."
   (with-temp-buffer

@@ -56,6 +56,8 @@ You can restrict snippets using `:mode` or `:condition`.
                 :condition '(or (texmathp) (org-inside-LaTeX-fragment-p)))
 ```
 
+Conditions are evaluated lazily: only for snippets whose regex already matched the text before point, and at most once per keystroke for each distinct `:mode`/`:condition` pair. Expensive predicates (e.g. `texmathp`, `org-element-context`) therefore cost nothing on keystrokes that trigger no snippet, and snippets sharing a group condition in `resnippets-define` share a single evaluation.
+
 ### Priority
 
 When multiple snippets match, use `:priority` to control which one wins (default: 0).
